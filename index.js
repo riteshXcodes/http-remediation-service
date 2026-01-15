@@ -38,6 +38,7 @@ app.use(express.json());
  * Agent yahin call karega
  */
 app.post("/execute", async (req, res) => {
+  try{
   const { action, target } = req.body;
 
   // Basic validation
@@ -112,6 +113,15 @@ app.post("/execute", async (req, res) => {
     status: "ignored",
     message: "Unsupported action"
   });
+
+  }catch(err){
+    console.error("❌ Remediation error:", err.message);
+
+    return res.status(500).json({
+      status: "error",
+      message: err.message
+    });
+  }
 });
 
 // IMPORTANT: On-Demand uses PORT env var
