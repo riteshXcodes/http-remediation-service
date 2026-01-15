@@ -1,6 +1,50 @@
 import express from "express";
 import fetch from "node-fetch";
 
+async function alertSRESlack(payload) {
+  const webhook = process.env.SLACK_WEBHOOK_URL;
+
+  if (!webhook) {
+    throw new Error("Slack webhook not configured");
+  }
+
+  const message = {
+    text: "🚨 *Security Alert – ThreatPilot*",
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Threat:* ${payload.threat || "Unknown"}\n*Severity:* ${payload.severity || "Medium"}`
+        }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Target:* ${payload.target || "N/A"}\n*Recommended Action:* ${payload.action}`
+        }
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `⏱ ${new Date().toISOString()}`
+          }
+        ]
+      }
+    ]
+  };
+
+  await fetch(webhook, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(message)
+  });
+}
+
+
 async function blockIPCloudflare(ip) {
   const zoneId = process.env.CF_ZONE_ID;
   const apiToken = process.env.CF_API_TOKEN;
@@ -106,15 +150,27 @@ app.post("/execute", async (req, res) => {
     });
   }
 
+  // if (action === "alert_sre") {
+  //   return res.json({
+  //     status: "success",
+  //     action_taken: "alert_sre",
+  //     method: "alert_simulation",
+  //     message: "SRE team notified",
+  //     executed_at: new Date().toISOString()
+  //   });
+  // }
+
   if (action === "alert_sre") {
-    return res.json({
-      status: "success",
-      action_taken: "alert_sre",
-      method: "alert_simulation",
-      message: "SRE team notified",
-      executed_at: new Date().toISOString()
-    });
-  }
+  await alertSRESlack(req.body);
+
+  return res.json({
+    status: "success",
+    action_taken: "alert_sre",
+    method: "slack_notification",
+    message: "SRE alerted via Slack",
+    executed_at: new Date().toISOString()
+  });
+}  
 
   // Fallback
   return res.status(400).json({
