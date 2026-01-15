@@ -1,6 +1,35 @@
 import express from "express";
 import fetch from "node-fetch";
 
+async function blockIPCloudflare(ip) {
+  const url = `https://api.cloudflare.com/client/v4/zones/${process.env.CF_ZONE_ID}/firewall/access_rules/rules`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.CF_API_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      mode: "block",
+      configuration: {
+        target: "ip",
+        value: ip
+      },
+      notes: "ThreatPilot automated remediation"
+    })
+  });
+
+  const data = await response.json();
+
+  if (!data.success) {
+    console.error("Cloudflare error:", data);
+    throw new Error("Cloudflare IP block failed");
+  }
+
+  return data.result;
+}
+
 const app = express();
 app.use(express.json());
 
@@ -22,14 +51,28 @@ app.post("/execute", async (req, res) => {
   // ---- ACTION HANDLING (SIMULATED) ----
 
   if (action === "block_ip") {
+    
+    // return res.json({
+    //   status: "success",
+    //   action_taken: "block_ip",
+    //   target,
+    //   method: "firewall_simulation",
+    //   message: `IP ${target} blocked`,
+    //   executed_at: new Date().toISOString()
+    // });
+
+    const rule = await blockIPCloudflare(target);
+
     return res.json({
       status: "success",
       action_taken: "block_ip",
       target,
-      method: "firewall_simulation",
-      message: `IP ${target} blocked`,
+      method: "cloudflare_firewall",
+      cloudflare_rule_id: rule.id,
+      message: `IP ${target} blocked via Cloudflare`,
       executed_at: new Date().toISOString()
     });
+    
   }
 
   if (action === "block_endpoint") {
