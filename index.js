@@ -2,12 +2,12 @@ import express from "express";
 import fetch from "node-fetch";
 
 async function blockIPCloudflare(ip) {
-  const url = `https://api.cloudflare.com/client/v4/zones/${process.env.CF_ZONE_ID}/firewall/access_rules/rules`;
+  const url = `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/firewall/access_rules/rules`;
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${process.env.CF_API_TOKEN}`,
+      "Authorization": `Bearer ${CF_API_TOKEN}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
