@@ -133,11 +133,15 @@ async function blockIPCloudflare(ip) {
 const app = express();
 app.use(express.json());
 
+app.get("/health", async(req,res) => {
+   res.send("ok");
+}
+
 /**
  * Single remediation endpoint
  * Agent yahin call karega
  */
-app.post("/execute", async (req, res) => {
+app.post("/", async (req, res) => {
   try{
   const { action, target, severity = "medium" } = req.body;
 
