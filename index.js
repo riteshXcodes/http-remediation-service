@@ -1,6 +1,54 @@
 import express from "express";
 import fetch from "node-fetch";
 
+
+/* =========================
+   JIRA CONFIG
+========================= */
+
+const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
+const JIRA_EMAIL = process.env.JIRA_EMAIL;
+const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN;
+const JIRA_PROJECT_KEY = process.env.JIRA_PROJECT_KEY;
+
+async function createJiraTicket({ summary, description, priority = "Medium" }) {
+  if (!JIRA_BASE_URL || !JIRA_EMAIL || !JIRA_API_TOKEN || !JIRA_PROJECT_KEY) {
+    throw new Error("Jira environment variables missing");
+  }
+
+  const auth = Buffer.from(${JIRA_EMAIL}:${JIRA_API_TOKEN}).toString("base64");
+
+  const payload = {
+    fields: {
+      project: { key: JIRA_PROJECT_KEY },
+      summary,
+      description,
+      issuetype: { name: "Task" },
+      priority: { name: priority },
+      labels: ["threatpilot", "automated"]
+    }
+  };
+
+  const res = await fetch(${JIRA_BASE_URL}/rest/api/3/issue, {
+    method: "POST",
+    headers: {
+      "Authorization": Basic ${auth},
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    console.error("Jira error:", data);
+    throw new Error("Failed to create Jira ticket");
+  }
+
+  return data.key;
+}
+
+
 async function alertSRESlack(payload) {
   const webhook = process.env.SLACK_WEBHOOK_URL;
 
@@ -128,29 +176,67 @@ app.post("/execute", async (req, res) => {
     
   }
 
-  if (action === "block_endpoint") {
-    return res.json({
-      status: "success",
-      action_taken: "block_endpoint",
-      target,
-      method: "app_config_simulation",
-      message: `Endpoint ${target} disabled`,
-      executed_at: new Date().toISOString()
-    });
-  }
+  // if (action === "block_endpoint") {
+  //   return res.json({
+  //     status: "success",
+  //     action_taken: "block_endpoint",
+  //     target,
+  //     method: "app_config_simulation",
+  //     message: `Endpoint ${target} disabled`,
+  //     executed_at: new Date().toISOString()
+  //   });
+  // }
 
-  if (action === "add_waf_rule") {
-    return res.json({
-      status: "success",
-      action_taken: "add_waf_rule",
-      rule: target,
-      method: "waf_simulation",
-      message: "WAF rule added",
-      executed_at: new Date().toISOString()
-    });
-  }
+  // if (action === "add_waf_rule") {
+  //   return res.json({
+  //     status: "success",
+  //     action_taken: "add_waf_rule",
+  //     rule: target,
+  //     method: "waf_simulation",
+  //     message: "WAF rule added",
+  //     executed_at: new Date().toISOString()
+  //   });
+  // }
 
-  // if (action === "alert_sre") {
+  // if (action === "rate_limit_ip") {
+  //   return res.json({
+  //     status: "success",
+  //     severity: "medium",
+  //     action_taken: "rate_limit_ip",
+  //     rule: target,
+  //     method: "rate_limit_simulation",
+  //     message: "IP rate-limited due to suspicious request spike",
+  //     limit: {
+  //     requests_per_minute: 100,
+  //     burst_limit: 20
+  //   },
+  //     executed_at: new Date().toISOString()
+  //   });
+  // }  
+
+
+      if (
+      action === "rate_limit_ip" ||
+      action === "add_waf_rule" ||
+      action === "block_endpoint"
+    ) {
+      const jiraKey = await createJiraTicket({
+        summary: [ThreatPilot] ${action.replaceAll("_", " ").toUpperCase()},
+        description: `Action: ${action}
+Target: ${JSON.stringify(target, null, 2)}
+Severity: ${severity}`,
+        priority: severity === "high" ? "High" : "Medium"
+      });
+
+      return res.json({
+        status: "pending_approval",
+        action,
+        target,
+        jira_ticket: jiraKey
+      });
+    }
+
+     // if (action === "alert_sre") {
   //   return res.json({
   //     status: "success",
   //     action_taken: "alert_sre",
@@ -159,22 +245,6 @@ app.post("/execute", async (req, res) => {
   //     executed_at: new Date().toISOString()
   //   });
   // }
-
-  if (action === "rate_limit_ip") {
-    return res.json({
-      status: "success",
-      severity: "medium",
-      action_taken: "rate_limit_ip",
-      rule: target,
-      method: "rate_limit_simulation",
-      message: "IP rate-limited due to suspicious request spike",
-      limit: {
-      requests_per_minute: 100,
-      burst_limit: 20
-    },
-      executed_at: new Date().toISOString()
-    });
-  }  
 
   if (action === "alert_sre") {
   await alertSRESlack(req.body);
