@@ -92,7 +92,7 @@ app.use(express.json());
  */
 app.post("/execute", async (req, res) => {
   try{
-  const { action, target, severity = "medium" } = req.body;
+  const { action, target } = req.body;
 
   // Basic validation
   if (!action) {
@@ -167,17 +167,6 @@ app.post("/execute", async (req, res) => {
     });
   }  
 
-
-
-  //    if (action === "alert_sre") {
-  //   return res.json({
-  //     status: "success",
-  //     action_taken: "alert_sre",
-  //     method: "alert_simulation",
-  //     message: "SRE team notified",
-  //     executed_at: new Date().toISOString()
-  //   });
-  // }
 
   if (action === "alert_sre") {
   await alertSRESlack(req.body);
