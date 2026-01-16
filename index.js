@@ -169,15 +169,15 @@ app.post("/execute", async (req, res) => {
 
 
 
-     if (action === "alert_sre") {
-    return res.json({
-      status: "success",
-      action_taken: "alert_sre",
-      method: "alert_simulation",
-      message: "SRE team notified",
-      executed_at: new Date().toISOString()
-    });
-  }
+  //    if (action === "alert_sre") {
+  //   return res.json({
+  //     status: "success",
+  //     action_taken: "alert_sre",
+  //     method: "alert_simulation",
+  //     message: "SRE team notified",
+  //     executed_at: new Date().toISOString()
+  //   });
+  // }
 
   if (action === "alert_sre") {
   await alertSRESlack(req.body);
