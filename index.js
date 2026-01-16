@@ -1,6 +1,8 @@
 import express from "express";
 import fetch from "node-fetch";
 
+const app = express();
+app.use(express.json());
 
 /* =========================
    JIRA CONFIG
@@ -16,18 +18,9 @@ async function createJiraTicket({ summary, description, priority = "Medium" }) {
     throw new Error("Jira environment variables missing");
   }
 
-  const auth = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString("base64");
-
-  const payload = {
-    fields: {
-      project: { key: JIRA_PROJECT_KEY },
-      summary,
-      description,
-      issuetype: { name: "Task" },
-      priority: { name: priority },
-      labels: ["threatpilot", "automated"]
-    }
-  };
+  const auth = Buffer.from(
+    `${JIRA_EMAIL}:${JIRA_API_TOKEN}`
+  ).toString("base64");
 
   const res = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue`, {
     method: "POST",
@@ -35,7 +28,16 @@ async function createJiraTicket({ summary, description, priority = "Medium" }) {
       "Authorization": `Basic ${auth}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      fields: {
+        project: { key: JIRA_PROJECT_KEY },
+        summary,
+        description,
+        issuetype: { name: "Task" },
+        priority: { name: priority },
+        labels: ["threatpilot", "automated"]
+      }
+    })
   });
 
   const data = await res.json();
@@ -48,50 +50,29 @@ async function createJiraTicket({ summary, description, priority = "Medium" }) {
   return data.key;
 }
 
+/* =========================
+   SLACK
+========================= */
 
 async function alertSRESlack(payload) {
   const webhook = process.env.SLACK_WEBHOOK_URL;
-
-  if (!webhook) {
-    throw new Error("Slack webhook not configured");
-  }
-
-  const message = {
-    text: "🚨 *Security Alert – ThreatPilot*",
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*Threat:* ${payload.threat || "Unknown"}\n*Severity:* ${payload.severity || "Medium"}`
-        }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*Target:* ${payload.target || "N/A"}\n*Recommended Action:* ${payload.action}`
-        }
-      },
-      {
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `⏱ ${new Date().toISOString()}`
-          }
-        ]
-      }
-    ]
-  };
+  if (!webhook) throw new Error("Slack webhook not configured");
 
   await fetch(webhook, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(message)
+    body: JSON.stringify({
+      text: `🚨 ThreatPilot Alert
+Action: ${payload.action}
+Target: ${JSON.stringify(payload.target)}
+Severity: ${payload.severity || "medium"}`
+    })
   });
 }
 
+/* =========================
+   CLOUDFLARE
+========================= */
 
 async function blockIPCloudflare(ip) {
   const zoneId = process.env.CF_ZONE_ID;
@@ -101,125 +82,58 @@ async function blockIPCloudflare(ip) {
     throw new Error("Cloudflare env vars missing");
   }
 
-  const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/firewall/access_rules/rules`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      mode: "block",
-      configuration: {
-        target: "ip",
-        value: ip
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${zoneId}/firewall/access_rules/rules`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiToken}`,
+        "Content-Type": "application/json"
       },
-      notes: "ThreatPilot automated remediation"
-    })
-  });
+      body: JSON.stringify({
+        mode: "block",
+        configuration: { target: "ip", value: ip },
+        notes: "ThreatPilot automated remediation"
+      })
+    }
+  );
 
-  const data = await response.json();
-
-  if (!data.success) {
-    console.error("Cloudflare error:", data);
-    throw new Error(data.errors?.[0]?.message || "Cloudflare block failed");
-  }
+  const data = await res.json();
+  if (!data.success) throw new Error("Cloudflare block failed");
 
   return data.result;
 }
 
+/* =========================
+   ROUTES
+========================= */
 
-const app = express();
-app.use(express.json());
+/** Redirect / → /execute (prevents Cannot POST /) */
+app.post("/", (req, res) => {
+  res.redirect(307, "/execute");
+});
 
-app.get("/health", async(req,res) => {
-   res.send("ok");
-}
+/** MAIN ENDPOINT */
+app.post("/execute", async (req, res) => {
+  try {
+    const { action, target, severity = "medium" } = req.body;
 
-/**
- * Single remediation endpoint
- * Agent yahin call karega
- */
-app.post("/", async (req, res) => {
-  try{
-  const { action, target, severity = "medium" } = req.body;
+    if (!action) {
+      return res.status(400).json({ error: "Action is required" });
+    }
 
-  // Basic validation
-  if (!action) {
-    return res.status(400).json({
-      status: "error",
-      message: "Action is required"
-    });
-  }
+    /* -------- BLOCK IP (Cloudflare) -------- */
+    if (action === "block_ip") {
+      const rule = await blockIPCloudflare(target);
+      return res.json({
+        status: "success",
+        action,
+        cloudflare_rule_id: rule.id
+      });
+    }
 
-  // ---- ACTION HANDLING (SIMULATED) ----
-
-  if (action === "block_ip") {
-    
-    // return res.json({
-    //   status: "success",
-    //   action_taken: "block_ip",
-    //   target,
-    //   method: "firewall_simulation",
-    //   message: `IP ${target} blocked`,
-    //   executed_at: new Date().toISOString()
-    // });
-
-    const rule = await blockIPCloudflare(target);
-
-    return res.json({
-      status: "success",
-      action_taken: "block_ip",
-      target,
-      method: "cloudflare_firewall",
-      cloudflare_rule_id: rule.id,
-      message: `IP ${target} blocked via Cloudflare`,
-      executed_at: new Date().toISOString()
-    });
-    
-  }
-
-  // if (action === "block_endpoint") {
-  //   return res.json({
-  //     status: "success",
-  //     action_taken: "block_endpoint",
-  //     target,
-  //     method: "app_config_simulation",
-  //     message: `Endpoint ${target} disabled`,
-  //     executed_at: new Date().toISOString()
-  //   });
-  // }
-
-  // if (action === "add_waf_rule") {
-  //   return res.json({
-  //     status: "success",
-  //     action_taken: "add_waf_rule",
-  //     rule: target,
-  //     method: "waf_simulation",
-  //     message: "WAF rule added",
-  //     executed_at: new Date().toISOString()
-  //   });
-  // }
-
-  // if (action === "rate_limit_ip") {
-  //   return res.json({
-  //     status: "success",
-  //     severity: "medium",
-  //     action_taken: "rate_limit_ip",
-  //     rule: target,
-  //     method: "rate_limit_simulation",
-  //     message: "IP rate-limited due to suspicious request spike",
-  //     limit: {
-  //     requests_per_minute: 100,
-  //     burst_limit: 20
-  //   },
-  //     executed_at: new Date().toISOString()
-  //   });
-  // }  
-
-
-      if (
+    /* -------- JIRA ACTIONS -------- */
+    if (
       action === "rate_limit_ip" ||
       action === "add_waf_rule" ||
       action === "block_endpoint"
@@ -235,51 +149,320 @@ Severity: ${severity}`,
       return res.json({
         status: "pending_approval",
         action,
-        target,
         jira_ticket: jiraKey
       });
     }
 
-     // if (action === "alert_sre") {
-  //   return res.json({
-  //     status: "success",
-  //     action_taken: "alert_sre",
-  //     method: "alert_simulation",
-  //     message: "SRE team notified",
-  //     executed_at: new Date().toISOString()
-  //   });
-  // }
+    /* -------- SLACK -------- */
+    if (action === "alert_sre") {
+      await alertSRESlack(req.body);
+      return res.json({
+        status: "success",
+        action,
+        message: "SRE alerted via Slack"
+      });
+    }
 
-  if (action === "alert_sre") {
-  await alertSRESlack(req.body);
+    return res.status(400).json({ error: "Unsupported action" });
 
-  return res.json({
-    status: "success",
-    action_taken: "alert_sre",
-    method: "slack_notification",
-    message: "SRE alerted via Slack",
-    executed_at: new Date().toISOString()
-  });
-}  
-
-  // Fallback
-  return res.status(400).json({
-    status: "ignored",
-    message: "Unsupported action"
-  });
-
-  }catch(err){
-    console.error("❌ Remediation error:", err.message);
-
-    return res.status(500).json({
-      status: "error",
-      message: err.message
-    });
+  } catch (err) {
+    console.error("❌ Error:", err.message);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// IMPORTANT: On-Demand uses PORT env var
-const PORT = process.env.PORT || 3000;
+/* =========================
+   START SERVER
+========================= */
+
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`HTTP Remediation Service running on port ${PORT}`);
+  console.log(`🚀 Remediation API running on port ${PORT}`);
 });
+
+
+
+
+
+// import express from "express";
+// import fetch from "node-fetch";
+
+
+// /* =========================
+//    JIRA CONFIG
+// ========================= */
+
+// const JIRA_BASE_URL = process.env.JIRA_BASE;
+// const JIRA_EMAIL = process.env.JIRA_MAIL;
+// const JIRA_API_TOKEN = process.env.JIRA_API;
+// const JIRA_PROJECT_KEY = process.env.JIRA_PROJECT;
+
+// async function createJiraTicket({ summary, description, priority = "Medium" }) {
+//   if (!JIRA_BASE_URL || !JIRA_EMAIL || !JIRA_API_TOKEN || !JIRA_PROJECT_KEY) {
+//     throw new Error("Jira environment variables missing");
+//   }
+
+//   const auth = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString("base64");
+
+//   const payload = {
+//     fields: {
+//       project: { key: JIRA_PROJECT_KEY },
+//       summary,
+//       description,
+//       issuetype: { name: "Task" },
+//       priority: { name: priority },
+//       labels: ["threatpilot", "automated"]
+//     }
+//   };
+
+//   const res = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue`, {
+//     method: "POST",
+//     headers: {
+//       "Authorization": `Basic ${auth}`,
+//       "Content-Type": "application/json"
+//     },
+//     body: JSON.stringify(payload)
+//   });
+
+//   const data = await res.json();
+
+//   if (!res.ok) {
+//     console.error("Jira error:", data);
+//     throw new Error("Failed to create Jira ticket");
+//   }
+
+//   return data.key;
+// }
+
+
+// async function alertSRESlack(payload) {
+//   const webhook = process.env.SLACK_WEBHOOK_URL;
+
+//   if (!webhook) {
+//     throw new Error("Slack webhook not configured");
+//   }
+
+//   const message = {
+//     text: "🚨 *Security Alert – ThreatPilot*",
+//     blocks: [
+//       {
+//         type: "section",
+//         text: {
+//           type: "mrkdwn",
+//           text: `*Threat:* ${payload.threat || "Unknown"}\n*Severity:* ${payload.severity || "Medium"}`
+//         }
+//       },
+//       {
+//         type: "section",
+//         text: {
+//           type: "mrkdwn",
+//           text: `*Target:* ${payload.target || "N/A"}\n*Recommended Action:* ${payload.action}`
+//         }
+//       },
+//       {
+//         type: "context",
+//         elements: [
+//           {
+//             type: "mrkdwn",
+//             text: `⏱ ${new Date().toISOString()}`
+//           }
+//         ]
+//       }
+//     ]
+//   };
+
+//   await fetch(webhook, {
+//     method: "POST",
+//     headers: { "Content-Type": "application/json" },
+//     body: JSON.stringify(message)
+//   });
+// }
+
+
+// async function blockIPCloudflare(ip) {
+//   const zoneId = process.env.CF_ZONE_ID;
+//   const apiToken = process.env.CF_API_TOKEN;
+
+//   if (!zoneId || !apiToken) {
+//     throw new Error("Cloudflare env vars missing");
+//   }
+
+//   const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/firewall/access_rules/rules`;
+
+//   const response = await fetch(url, {
+//     method: "POST",
+//     headers: {
+//       "Authorization": `Bearer ${apiToken}`,
+//       "Content-Type": "application/json"
+//     },
+//     body: JSON.stringify({
+//       mode: "block",
+//       configuration: {
+//         target: "ip",
+//         value: ip
+//       },
+//       notes: "ThreatPilot automated remediation"
+//     })
+//   });
+
+//   const data = await response.json();
+
+//   if (!data.success) {
+//     console.error("Cloudflare error:", data);
+//     throw new Error(data.errors?.[0]?.message || "Cloudflare block failed");
+//   }
+
+//   return data.result;
+// }
+
+
+// const app = express();
+// app.use(express.json());
+
+
+// /**
+//  * Single remediation endpoint
+//  * Agent yahin call karega
+//  */
+// app.post("/execute", async (req, res) => {
+//   try{
+//   const { action, target, severity = "medium" } = req.body;
+
+//   // Basic validation
+//   if (!action) {
+//     return res.status(400).json({
+//       status: "error",
+//       message: "Action is required"
+//     });
+//   }
+
+//   // ---- ACTION HANDLING (SIMULATED) ----
+
+//   if (action === "block_ip") {
+    
+//     // return res.json({
+//     //   status: "success",
+//     //   action_taken: "block_ip",
+//     //   target,
+//     //   method: "firewall_simulation",
+//     //   message: `IP ${target} blocked`,
+//     //   executed_at: new Date().toISOString()
+//     // });
+
+//     const rule = await blockIPCloudflare(target);
+
+//     return res.json({
+//       status: "success",
+//       action_taken: "block_ip",
+//       target,
+//       method: "cloudflare_firewall",
+//       cloudflare_rule_id: rule.id,
+//       message: `IP ${target} blocked via Cloudflare`,
+//       executed_at: new Date().toISOString()
+//     });
+    
+//   }
+
+//   // if (action === "block_endpoint") {
+//   //   return res.json({
+//   //     status: "success",
+//   //     action_taken: "block_endpoint",
+//   //     target,
+//   //     method: "app_config_simulation",
+//   //     message: `Endpoint ${target} disabled`,
+//   //     executed_at: new Date().toISOString()
+//   //   });
+//   // }
+
+//   // if (action === "add_waf_rule") {
+//   //   return res.json({
+//   //     status: "success",
+//   //     action_taken: "add_waf_rule",
+//   //     rule: target,
+//   //     method: "waf_simulation",
+//   //     message: "WAF rule added",
+//   //     executed_at: new Date().toISOString()
+//   //   });
+//   // }
+
+//   // if (action === "rate_limit_ip") {
+//   //   return res.json({
+//   //     status: "success",
+//   //     severity: "medium",
+//   //     action_taken: "rate_limit_ip",
+//   //     rule: target,
+//   //     method: "rate_limit_simulation",
+//   //     message: "IP rate-limited due to suspicious request spike",
+//   //     limit: {
+//   //     requests_per_minute: 100,
+//   //     burst_limit: 20
+//   //   },
+//   //     executed_at: new Date().toISOString()
+//   //   });
+//   // }  
+
+
+//       if (
+//       action === "rate_limit_ip" ||
+//       action === "add_waf_rule" ||
+//       action === "block_endpoint"
+//     ) {
+//       const jiraKey = await createJiraTicket({
+//         summary: `[ThreatPilot] ${action.replaceAll("_", " ").toUpperCase()}`,
+//         description: `Action: ${action}
+// Target: ${JSON.stringify(target, null, 2)}
+// Severity: ${severity}`,
+//         priority: severity === "high" ? "High" : "Medium"
+//       });
+
+//       return res.json({
+//         status: "pending_approval",
+//         action,
+//         target,
+//         jira_ticket: jiraKey
+//       });
+//     }
+
+//      // if (action === "alert_sre") {
+//   //   return res.json({
+//   //     status: "success",
+//   //     action_taken: "alert_sre",
+//   //     method: "alert_simulation",
+//   //     message: "SRE team notified",
+//   //     executed_at: new Date().toISOString()
+//   //   });
+//   // }
+
+//   if (action === "alert_sre") {
+//   await alertSRESlack(req.body);
+
+//   return res.json({
+//     status: "success",
+//     action_taken: "alert_sre",
+//     method: "slack_notification",
+//     message: "SRE alerted via Slack",
+//     executed_at: new Date().toISOString()
+//   });
+// }  
+
+//   // Fallback
+//   return res.status(400).json({
+//     status: "ignored",
+//     message: "Unsupported action"
+//   });
+
+//   }catch(err){
+//     console.error("❌ Remediation error:", err.message);
+
+//     return res.status(500).json({
+//       status: "error",
+//       message: err.message
+//     });
+//   }
+// });
+
+// // IMPORTANT: On-Demand uses PORT env var
+// const PORT = process.env.PORT || 3000;
+// app.listen(PORT, () => {
+//   console.log(`HTTP Remediation Service running on port ${PORT}`);
+// });
