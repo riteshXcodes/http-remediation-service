@@ -160,6 +160,22 @@ app.post("/execute", async (req, res) => {
   //   });
   // }
 
+  if (action === "rate_limit_ip") {
+    return res.json({
+      status: "success",
+      severity: "medium",
+      action_taken: "rate_limit_ip",
+      rule: target,
+      method: "rate_limit_simulation",
+      message: "IP rate-limited due to suspicious request spike",
+      limit: {
+      requests_per_minute: 100,
+      burst_limit: 20
+    },
+      executed_at: new Date().toISOString()
+    });
+  }  
+
   if (action === "alert_sre") {
   await alertSRESlack(req.body);
 
