@@ -16,7 +16,7 @@ async function createJiraTicket({ summary, description, priority = "Medium" }) {
     throw new Error("Jira environment variables missing");
   }
 
-  const auth = Buffer.from(${JIRA_EMAIL}:${JIRA_API_TOKEN}).toString("base64");
+  const auth = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString("base64");
 
   const payload = {
     fields: {
@@ -29,10 +29,10 @@ async function createJiraTicket({ summary, description, priority = "Medium" }) {
     }
   };
 
-  const res = await fetch(${JIRA_BASE_URL}/rest/api/3/issue, {
+  const res = await fetch(`${JIRA_BASE_URL}/rest/api/3/issue`, {
     method: "POST",
     headers: {
-      "Authorization": Basic ${auth},
+      "Authorization": `Basic ${auth}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
@@ -139,7 +139,7 @@ app.use(express.json());
  */
 app.post("/execute", async (req, res) => {
   try{
-  const { action, target } = req.body;
+  const { action, target, severity = "medium" } = req.body;
 
   // Basic validation
   if (!action) {
@@ -221,7 +221,7 @@ app.post("/execute", async (req, res) => {
       action === "block_endpoint"
     ) {
       const jiraKey = await createJiraTicket({
-        summary: [ThreatPilot] ${action.replaceAll("_", " ").toUpperCase()},
+        summary: `[ThreatPilot] ${action.replaceAll("_", " ").toUpperCase()}`,
         description: `Action: ${action}
 Target: ${JSON.stringify(target, null, 2)}
 Severity: ${severity}`,
